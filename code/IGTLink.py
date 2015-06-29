@@ -577,10 +577,10 @@ class IgtLinkTransform:
 def TestIGTLink():
 
     igtlink = IGTLinkConnection()
-    igtlink.hostname = 'localhost'
+    igtlink.hostname = '10.140.18.210'
     igtlink.connect()
     igtlink.startListening()
     time.sleep(10)
     igtlink.stopListening()
-    disconnect()
+    igtlink.disconnect()
 
