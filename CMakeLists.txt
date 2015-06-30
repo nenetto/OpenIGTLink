@@ -4,9 +4,6 @@ set(CMAKE_MACOSX_RPATH 0)
 
 project(IGTLinkPython)
 
-add_custom_target(IGTLinkPython)
-
 # Install
 
-install(TARGETS IGTLinkPython
-        FILES "${PROJECT_SOURCE_DIR}/code/IGTLink.py" DESTINATION bin)
+install(FILES "${PROJECT_SOURCE_DIR}/code/IGTLink.py" DESTINATION ${INSTALL_PATH}/bin)
