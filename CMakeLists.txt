@@ -4,6 +4,8 @@ set(CMAKE_MACOSX_RPATH 0)
 
 project(IGTLinkPython)
 
+add_custom_target(IGTLinkPython)
+
 # Install
 
 install(TARGETS IGTLinkPython
