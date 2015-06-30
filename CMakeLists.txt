@@ -6,4 +6,5 @@ project(IGTLinkPython)
 
 # Install
 
-install(FILES "${PROJECT_SOURCE_DIR}/code/IGTLink.py" DESTINATION bin)
+install(TARGETS IGTLinkPython
+        FILES "${PROJECT_SOURCE_DIR}/code/IGTLink.py" DESTINATION bin)
