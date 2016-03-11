@@ -213,29 +213,19 @@ class OpenIGTLinkHeader:
             seconds = int(self.TIME_STAMP)
             fraction = self.TIME_STAMP - seconds
 
-
-
-            fracbin = '0b'
-            rest = 1.0
-            n = -1
-            while rest != 0.0:
-                if (fraction / 2 ** (n)) > 1.0:
-                    fracbin = fracbin + '1'
-                    fraction = fraction - 2 ** (n)
-                else:
-                    fracbin = fracbin + '0'
-                n = n + 1
-
-
-            frac = self.readUnsignedInt32()
-
-            fracbin = bin(frac)
-            fracbin = fracbin[2::]
-            fraction = 0.0
-            n = -1
-            for i in fracbin:
-                fraction = fraction + int(i) * (2**n)
-                n = n - 1
+        fracbin = '0b'
+        rest = 1.0
+        n = -1
+        rest = fraction
+        while rest != 0.0:
+            if (rest / 2 ** (n)) >= 1.0:
+                fracbin = fracbin + '1'
+                rest = rest - 2 ** (n)
+                print n, 2 ** (n) , rest
+            else:
+                fracbin = fracbin + '0'
+                print n, '0', rest
+            n = n - 1
 
 
         except:
