@@ -43,7 +43,7 @@ class IGTLinkConnection:
         self.__mutexigtLinkStatus = Semaphore()
         self.__state = "Disconnected"
         self.__mutexState = Semaphore()
-        self._readingthread = None
+        self.__readingthread = None
         self.__mutexStopSignal = Semaphore()
         self.__threadStopSignal = True
         self.__numberOfCalls = 0
@@ -79,7 +79,6 @@ class IGTLinkConnection:
         finally:
             self.__mutexStopSignal.release()
         return
-
 
     def connect(self):
 
@@ -177,14 +176,12 @@ class IGTLinkConnection:
                 typeStr = typeStr + e
         return typeStr
 
-
     def socketReadDEVICE_NAME(self):
         coding = '>s' # DEVICE_NAME is char[20] big endian
         numberOfBytes = 20
         socketResult = self.socketobject.recv(numberOfBytes)
         #print 'DEVICE_NAME: ', socketResult
         return socketResult.replace(" ", "")
-
 
     def socketReadTIME_STAMP(self):
         # Retrieve timestamp information from the 64-bit OpenIGTLink timestamp
@@ -223,7 +220,6 @@ class IGTLinkConnection:
             chunk = self.socketobject.recv(min(numberOfBytes - bytes_recd, 2048))
             bytes_recd = bytes_recd + min(numberOfBytes - bytes_recd, 2048)
         return
-
 
     def readUnsignedInt32(self):
         coding = '>L' #  32 bits
@@ -316,7 +312,6 @@ class IGTLinkConnection:
 
         self.__igtlinkStatus.setNewData( Data_Code, Data_Subcode, Data_ErrorName, Data_StatusMessage, timestamp )
 
-
     def readingThread(self):
         self.__numberOfCalls = self.__numberOfCalls + 1
         print "Thread Called: ", self.__numberOfCalls, " times"
@@ -403,9 +398,9 @@ class IGTLinkConnection:
             self.setState("Listening")
             self.setStopSignal(False)
             # Launch Thread for reading
-            self._readingthread = Thread(target=self.readingThread, args=())
-            self._readingthread.daemon = True   # Daemonize thread
-            self._readingthread.start()
+            self.__readingthread = Thread(target=self.readingThread, args=())
+            self.__readingthread.daemon = True   # Daemonize thread
+            self.__readingthread.start()
 
     def stopListening(self):
         self.setStopSignal(True)
@@ -577,10 +572,10 @@ class IgtLinkTransform:
 def TestIGTLink():
 
     igtlink = IGTLinkConnection()
-    igtlink.hostname = '10.140.18.210'
+    igtlink.hostname = 'localhost'
     igtlink.connect()
     igtlink.startListening()
-    time.sleep(10)
+    time.sleep(3)
     igtlink.stopListening()
     igtlink.disconnect()
 
