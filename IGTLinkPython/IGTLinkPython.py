@@ -328,6 +328,9 @@ class IGTLinkConnection:
                 data_timestamp = self.socketReadTIME_STAMP()
                 data_bodysize = self.socketReadBODY_SIZE()
                 data_crc64 = self.socketReadCRC64()
+
+                print data_version, data_type, data_devicename, data_timestamp, data_bodysize, data_crc64
+
             except:
                 print "Link could be death... Stopping Listening"
                 self.stopListening()
@@ -511,9 +514,9 @@ class IgtLinkTransform:
     def __str__(self):
         transformName, transformMatrix, timestamp, angle = self.getData()
         strForPrint = "Transform Name: " + transformName +  "\n"
-        #strForPrint = strForPrint + "     TimeStamp: " + timestamp.__str__() +  "\n"
-        #strForPrint = strForPrint + "          Data: \n" + transformMatrix.__str__() +  "\n"
-        strForPrint = strForPrint + "         Angle: " + str(angle) +  "\n"
+        strForPrint = strForPrint + "     TimeStamp: " + timestamp.__str__() +  "\n"
+        strForPrint = strForPrint + "          Data: \n" + transformMatrix.__str__() +  "\n"
+        #strForPrint = strForPrint + "         Angle: " + str(angle) +  "\n"
         return strForPrint
 
     def setNewData(self, trasform, timestamp):
@@ -535,7 +538,11 @@ class IgtLinkTransform:
 
         # Product of the rotated plane vector and Z (Original position)
         dot = crossZ
-        return math.degrees(math.acos(dot))
+
+        try: 
+            return math.degrees(math.acos(dot))
+        finally:
+            return 0
 
 
     def getData(self):
