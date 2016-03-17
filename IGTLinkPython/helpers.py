@@ -173,6 +173,7 @@ def crc64(buffer):
 
 
 def PrintPercentage(percentage, preMessage = ''):
+
     timing = datetime.datetime.now().strftime('%H:%M:%S')
     timing = "[" + timing + "]"
 

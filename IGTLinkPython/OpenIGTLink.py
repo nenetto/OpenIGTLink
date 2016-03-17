@@ -598,6 +598,27 @@ class OpenIGTLinkTransform(OpenIGTLinkMessage, object):
         finally:
             self._mutex.release()
 
+    def getDictRepresentation(self):
+
+        t = self.getTransform()
+        dictRepr = {'TYPE':'TRANSFORM',\
+                    'DEVICE_NAME': self.header.getDEVICE_NAME(),\
+                    'TIME_STAMP': self.header.getTIME_STAMP(),\
+                    'T00': t[0,0],\
+                    'T01': t[0,1],\
+                    'T02': t[0,2],\
+                    'T03': t[0,3],\
+                    'T10': t[1,0],\
+                    'T11': t[1,1],\
+                    'T12': t[1,2],\
+                    'T13': t[1,3],\
+                    'T20': t[2,0],\
+                    'T21': t[2,1],\
+                    'T22': t[2,2],\
+                    'T23': t[2,3],\
+                    }
+        return dictRepr
+
 class OpenIGTLinkStatus(OpenIGTLinkMessage, object):
 
     # Private data members
@@ -885,7 +906,20 @@ class OpenIGTLinkStatus(OpenIGTLinkMessage, object):
         typeStr = bodyDataString.replace('\x00', '')
         self.setSTATUS_MESSAGE(typeStr)
 
-class OpenIGTLinkServer:
+    def getDictRepresentation(self):
+
+        dictRepr = {'TYPE':'STATUS',\
+                    'DEVICE_NAME': self.header.getDEVICE_NAME(),\
+                    'TIME_STAMP': self.header.getTIME_STAMP(),\
+                    'CODE': self.getCODE(),\
+                    'SUBCODE': self.getSUBCODE(),\
+                    'ERROR_NAME': self.getERROR_NAME(),\
+                    'STATUS_MESSAGE': self.getSTATUS_MESSAGE(),\
+                    }
+
+        return dictRepr
+
+class OpenIGTLinkConnection:
 
     # Private Data Member
     __mutexState = None
@@ -895,8 +929,9 @@ class OpenIGTLinkServer:
     __mutexStopSignal = None
     __threadStopSignal = True
     __numberOfCalls = 0
+    __messageListDf = None
 
-    def __init__(self, host = 'localhost', portnumber = 18944, maximumConnections = 10):
+    def __init__(self, connectionType = 'server', host = 'localhost', portnumber = 18944, maximumConnections = 10):
 
         self.hostname = host
         self.portnumber = portnumber
@@ -904,6 +939,7 @@ class OpenIGTLinkServer:
         self.__mutexStopSignal = threading.Semaphore()
         self.__mutexState = threading.Semaphore()
         self.maxConnection = maximumConnections
+        self.connectionType = connectionType
 
     def getState(self):
         self.__mutexState.acquire()
@@ -940,6 +976,7 @@ class OpenIGTLinkServer:
     def connect(self):
 
         if self.getState() == "Connected":
+            print "Already Connected"
             return
 
         previousState = self.getState()
@@ -970,21 +1007,29 @@ class OpenIGTLinkServer:
 
             print 'Ip address of ' + self.hostname + ' is ' + self.remote_ip
 
-
-
             connected = False
             counter = 0
             while connected == False:
                 counter = counter + 1
                 try:
-                    self.socketConnection.bind((self.remote_ip , self.portnumber))
-                    # Set max connections
-                    self.socketConnection.listen(self.maxConnection)
 
-                    self.socketobject, addr = self.socketConnection.accept()
+                    if self.connectionType == 'server':
+                        print 'Connecting as a server. Waiting for other connections to continue...'
+                        self.socketConnection.bind((self.remote_ip , self.portnumber))
+                        # Set max connections
+                        self.socketConnection.listen(self.maxConnection)
 
-                    connected = True
+                        self.socketobject, addr = self.socketConnection.accept()
+
+                        connected = True
+                    elif self.connectionType == 'client':
+                        self.socketConnection.settimeout(1)
+                        self.socketConnection.connect((self.remote_ip , self.portnumber))
+                        connected = True
+
+
                 except Exception, e:
+                    print "Trying to connect to server. {0:d} attempst left".format(10 - counter)
                     print('[Error]:Connection to socket was wrong %s:%d. ' % (self.remote_ip, self.portnumber))
                     print('        Exception type is %s' % e)
                     connected = False
@@ -992,7 +1037,6 @@ class OpenIGTLinkServer:
                         self.setState(previousState)
                         print "[Error]: Cannot Connect socket"
                         return
-
 
 
             print 'Socket Connected to ' + self.hostname + ' on ip ' + self.remote_ip
@@ -1004,14 +1048,15 @@ class OpenIGTLinkServer:
     def disconnect(self):
 
         if self.getState() == "Disconnected":
+            print "Already disconnected"
             return
 
         previousState = self.getState()
         if self.getState() == "Connected":
             self.setState("AttemptingToDisconnect")
 
-            if isinstance(self.socketobject, socket.socket):
-                self.socketobject.close()
+            if isinstance(self.socketConnection, socket.socket):
+                self.socketConnection.close()
                 print 'Connection closed'
                 self.setState("Disconnected")
                 return
@@ -1043,7 +1088,7 @@ class OpenIGTLinkServer:
             self.setState("Connected")
             return
 
-    def startSending(self, timeOut = 60):
+    def startSending(self, timeOut = 60, rate = 0.25):
         previousState = self.getState()
 
         try:
@@ -1051,7 +1096,7 @@ class OpenIGTLinkServer:
             if previousState == "Connected":
                 self.setState("Sending")
                 self.setStopSignal(False)
-
+                self.rate = rate
                 # Launch Thread for reading
                 self.__readingthread = threading.Thread(target=self.sendingThread, args=())
                 self.__readingthread.daemon = True   # Daemonize thread
@@ -1060,12 +1105,15 @@ class OpenIGTLinkServer:
                 for i in range(timeOut*4):
                     helpers.PrintPercentage(100.0*(i+1.0)/(timeOut*4), 'Sending time to finish: Press Ctrl + C for end server ')
                     time.sleep(0.25)
-                self.stopSending()
+                self.setStopSignal(True)
+                self.setState("Connected")
 
         except KeyboardInterrupt:
-            self.stopSending()
+            self.setState("Connected")
+            self.setStopSignal(True)
+            self.disconnect()
 
-    def stopSending(self):
+    def stopThreads(self):
 
         self.setStopSignal(True)
 
@@ -1079,15 +1127,97 @@ class OpenIGTLinkServer:
             self.setState("AttemptingToSendNewData")
             # Send messages
             N = len(self.__messageList)
-            for i in range(N) :
+            for i in range(N):
+                time.sleep(self.rate)
                 try:
                     self.socketobject.send(self.__messageList[i])
                 except:
                     print "Link could be death... Stopping Sending"
-                    self.stopSending()
+                    self.setState("Connected")
+                    #self.stopThreads()
                     return -1
 
             self.setState("Sending")
+
+        self.setState("Connected")
+
+    def startListening(self, timeOut = 60):
+        previousState = self.getState()
+
+
+        try:
+            if previousState == "Connected":
+                self.setState("Listening")
+                self.__messageListDf = list()
+                self.setStopSignal(False)
+                # Launch Thread for reading
+                self.__readingthread = threading.Thread(target=self.readingThread, args=())
+                self.__readingthread.daemon = True   # Daemonize thread
+                self.__readingthread.start()
+
+                for i in range(timeOut*4):
+                    helpers.PrintPercentage(100.0*(i+1.0)/(timeOut*4), 'Listening time to finish: Press Ctrl + C for end client ')
+                    time.sleep(0.25)
+                self.setStopSignal(True)
+                self.setState("Connected")
+
+        except KeyboardInterrupt:
+            self.setState("Connected")
+            self.setStopSignal(True)
+            self.disconnect()
+
+    def readMessage(self):
+        # Create header
+        header = OpenIGTLinkHeader()
+
+        # Receive data from socket
+        socketHeader = self.socketConnection.recv(header.IGTLinkHeaderSize)
+
+        # Unpack header
+        header.unpack(socketHeader)
+
+        # Read Body Size
+        bodySize = header.getBODY_SIZE()
+        socketBody = self.socketConnection.recv(bodySize)
+
+
+        try:
+            # Check Type of message
+            if header.getTYPE() == 'STATUS':
+                status = OpenIGTLinkStatus()
+                status.header.unpack(socketHeader)
+                status.unpackStatus(socketBody)
+                self.__messageListDf.append(status.getDictRepresentation())
+                print "[Status]"
+            elif header.getTYPE() == 'TRANSFORM':
+                transform = OpenIGTLinkTransform()
+                transform.header.unpack(socketHeader)
+                transform.unpackTransform(socketBody)
+                self.__messageListDf.append(transform.getDictRepresentation())
+                print "[Transform]"
+            else:
+                print "Message Type is not recognised: " + header.getTYPE()
+        except Exception as inst:
+            print inst
+
+    def readingThread(self):
+        self.__numberOfCalls = self.__numberOfCalls + 1
+        print "Thread Called: ", self.__numberOfCalls, " times"
+
+        # Read a complete message
+        previousState = self.getState()
+        while self.getState() == "Listening" and self.getStopSignal() == False:
+            self.setState("AttemptingToRecieveNewData")
+            # Read header
+            try:
+                self.readMessage()
+
+            except:
+                print "waiting..."
+                #self.stopThreads()
+
+            self.setState("Listening")
+
 
         self.setState("Connected")
 
@@ -1149,8 +1279,33 @@ class OpenIGTLinkServer:
             self.setState(previousState)
             return
             
+    def writeFileMessages(self, filepath):
+
+        if self.getState() == "WritingMessageFile":
+            return
+
+        previousState = self.getState()
+
+        if previousState == "Disconnected":
+            self.setState("AttemptingToWriteMessageFile")
+            print "Trying to Write Message File"
 
 
-            
+            try:
+                df = pandas.DataFrame(self.__messageListDf)
+                df.to_csv(filepath, index = False, na_rep = 'NaN')
+
+            except Exception as inst:
+                print "[Error]: Cannot Write File"
+                print inst
+
+            self.setState(previousState)
+            print "File Written. Number of messages:", len(self.__messageListDf)
+
+
+        else:
+            print "[Error]: Cannot Write File from state: " + previousState
+            self.setState(previousState)
+            return
 
 
