@@ -1,0 +1,13 @@
+package:
+  name: openigtlink
+  version: 1.2.1
+
+build:
+  number: 1
+
+requirements:
+  run:
+    - python
+    - pandas
+about:
+  summary: Python server and client for OpenIGTLink connections

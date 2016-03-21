@@ -15,9 +15,9 @@ user: nenetto
 
 ## The platforms to build on.
 ## platform defaults to linux-64 
-# platform: 
-  - linux-64
-  - linux-32
+platform: 
+ - linux-64
+ - linux-32
 ## The engine are the inital conda packages you want to run with 
 # engine:
   - python=2
@@ -67,5 +67,5 @@ script:
 #   - *.log
 
 ## Build Targets: Upload these files to your binstar package
-# build_targets:
-#   - dist/*
+build_targets:
+   - dist/*
