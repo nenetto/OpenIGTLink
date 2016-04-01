@@ -930,6 +930,9 @@ class OpenIGTLinkConnection:
     __threadStopSignal = True
     __numberOfCalls = 0
     __messageListDf = None
+    __connectingthread = None
+    __mutexConnections = None
+    __connectedSockets = None
 
     def __init__(self, connectionType = 'server', host = 'localhost', portnumber = 18944, maximumConnections = 10):
 
@@ -938,6 +941,8 @@ class OpenIGTLinkConnection:
         self.__state = "Disconnected"
         self.__mutexStopSignal = threading.Semaphore()
         self.__mutexState = threading.Semaphore()
+        self.__mutexConnections = threading.Semaphore()
+        self.__connectedSockets = list()
         self.maxConnection = maximumConnections
         self.connectionType = connectionType
 
@@ -1007,43 +1012,31 @@ class OpenIGTLinkConnection:
 
             print 'Ip address of ' + self.hostname + ' is ' + self.remote_ip
 
-            connected = False
-            counter = 0
-            while connected == False:
-                counter = counter + 1
-                try:
+            try:
 
-                    if self.connectionType == 'server':
-                        print 'Connecting as a server. Waiting for other connections to continue...'
-                        self.socketConnection.bind((self.remote_ip , self.portnumber))
-                        # Set max connections
-                        self.socketConnection.listen(self.maxConnection)
+                if self.connectionType == 'server':
+                    self.socketConnection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    self.socketConnection.bind((self.remote_ip , self.portnumber))
+                    self.socketConnection.listen(self.maxConnection)
+                
 
-                        self.socketobject, addr = self.socketConnection.accept()
+                # Launch Thread for reading
+                self.setStopSignal(False)
+                self.__connectingthread = threading.Thread(target=self.connectThread, args=())
+                self.__connectingthread.daemon = True   # Daemonize thread
+                self.__connectingthread.start()
 
-                        connected = True
-                    elif self.connectionType == 'client':
-                        self.socketConnection.settimeout(1)
-                        self.socketConnection.connect((self.remote_ip , self.portnumber))
-                        connected = True
+                if self.connectionType == 'server':
+                    self.setState("Connected")
+                elif self.connectionType == 'client':
+                    for i in range(30):
+                        helpers.PrintPercentage(100.0*(i+1.0)/(30), 'Waiting for server...')
+                        time.sleep(1)
+                        if self.getState() == 'Connected':
+                            return
 
-
-                except Exception, e:
-                    print "Trying to connect to server. {0:d} attempst left".format(10 - counter)
-                    print('[Error]:Connection to socket was wrong %s:%d. ' % (self.remote_ip, self.portnumber))
-                    print('        Exception type is %s' % e)
-                    connected = False
-                    if counter == 10:
-                        self.setState(previousState)
-                        print "[Error]: Cannot Connect socket"
-                        return
-
-
-            print 'Socket Connected to ' + self.hostname + ' on ip ' + self.remote_ip
-            self.setState("Connected")
-            return
-        print "[Error]: Cannot Connect from state: " + previousState
-        self.setState(previousState)
+            except KeyboardInterrupt:
+                self.setState(previousState)
 
     def disconnect(self):
 
@@ -1129,13 +1122,18 @@ class OpenIGTLinkConnection:
             N = len(self.__messageList)
             for i in range(N):
                 time.sleep(self.rate)
-                try:
-                    self.socketobject.send(self.__messageList[i])
-                except:
-                    print "Link could be death... Stopping Sending"
-                    self.setState("Connected")
-                    #self.stopThreads()
-                    return -1
+
+                self.__mutexConnections.acquire()
+
+                for s in self.__connectedSockets:
+                    try:
+                        s.send(self.__messageList[i])
+                    except:
+                        s.close()
+                        self.__connectedSockets.remove(s)
+                        print '* One link removed'
+
+                self.__mutexConnections.release()
 
             self.setState("Sending")
 
@@ -1188,13 +1186,15 @@ class OpenIGTLinkConnection:
                 status.header.unpack(socketHeader)
                 status.unpackStatus(socketBody)
                 self.__messageListDf.append(status.getDictRepresentation())
-                print "[Status]"
+                #print "[Status]"
             elif header.getTYPE() == 'TRANSFORM':
                 transform = OpenIGTLinkTransform()
                 transform.header.unpack(socketHeader)
                 transform.unpackTransform(socketBody)
                 self.__messageListDf.append(transform.getDictRepresentation())
-                print "[Transform]"
+                #print "[Transform]"
+
+
             else:
                 print "Message Type is not recognised: " + header.getTYPE()
         except Exception as inst:
@@ -1213,13 +1213,78 @@ class OpenIGTLinkConnection:
                 self.readMessage()
 
             except:
-                print "waiting..."
+                pass
+                #print "waiting..."
                 #self.stopThreads()
 
             self.setState("Listening")
 
 
         self.setState("Connected")
+
+    def connectThread(self):
+
+        previousState = self.getState()
+
+        connected = False
+        counter = 0
+
+        previousState = self.getState()
+
+        try:
+
+            if self.connectionType == 'server':
+                print 'Connecting as a server. Waiting for connections...'
+
+                while self.getStopSignal() == False:
+                    socketobject, addr = self.socketConnection.accept()
+
+                    self.__mutexConnections.acquire()
+                    try:
+                        self.__connectedSockets.append(socketobject)
+                        print "Adding new connection at", addr[1]
+                    finally:
+                        self.__mutexConnections.release()
+                
+
+            elif self.connectionType == 'client':
+                print 'Connecting as a client. Waiting for connect...'
+                
+                connected = False
+                counter = 0
+                while connected == False:
+                    counter = counter + 1
+                    try:
+
+                        self.socketConnection.settimeout(1)
+                        self.socketConnection.connect((self.remote_ip , self.portnumber))
+                        connected = True
+
+
+                    except Exception, e:
+                        print "Trying to connect to server. {0:d} attempst left".format(10 - counter)
+                        print('[Error]:Connection to socket was wrong %s:%d. ' % (self.remote_ip, self.portnumber))
+                        print('        Exception type is %s' % e)
+                        connected = False
+                        if counter == 10:
+                            self.setState(previousState)
+                            print "[Error]: Cannot Connect socket"
+                            return
+
+
+                print 'Socket Connected to ' + self.hostname + ' on ip ' + self.remote_ip
+                self.setState("Connected")
+                return
+                
+                
+                
+        except Exception, e:
+            print('[Error]:Connection to socket was wrong %s:%d. ' % (self.remote_ip, self.portnumber))
+            print('        Exception type is %s' % e)
+            connected = False
+            if counter == 10:
+                self.setState("Disconnected")
+                print "[Error]: Cannot Connect socket"
 
     def loadFileMessages(self, filepath):
 

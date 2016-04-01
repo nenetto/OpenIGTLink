@@ -162,13 +162,13 @@ def crc64(body, crc64 = None):
     return crc64 #struct.pack('>Q',crc64)
 
 
-def PrintPercentage(percentage, preMessage = ''):
+def PrintPercentage(percentage, preMessage = '', postMessage = ''):
 
     timing = datetime.datetime.now().strftime('%H:%M:%S')
     timing = "[" + timing + "]"
 
     nlines = (numpy.round(20 * percentage/100.0)).astype(int)
-    newString = preMessage + timing + "--[" + '|'*nlines + ' '*(20-nlines) + "]"
+    newString = preMessage + timing + "--[" + '|'*nlines + ' '*(20-nlines) + "]" + postMessage
     if(percentage == 100.0):
         newString = newString + ' Finished!'
 

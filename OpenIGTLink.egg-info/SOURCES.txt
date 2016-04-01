@@ -1,9 +1,0 @@
-setup.py
-OpenIGTLink/OpenIGTLink.py
-OpenIGTLink/__init__.py
-OpenIGTLink/helpers.py
-OpenIGTLink.egg-info/PKG-INFO
-OpenIGTLink.egg-info/SOURCES.txt
-OpenIGTLink.egg-info/dependency_links.txt
-OpenIGTLink.egg-info/requires.txt
-OpenIGTLink.egg-info/top_level.txt
