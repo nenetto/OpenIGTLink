@@ -5,6 +5,7 @@ __date__ = 'March 11 2016'
 
 
 import threading
+import multiprocessing
 import copy
 import numpy
 import struct
@@ -13,6 +14,7 @@ import helpers
 import pandas
 import time
 import signal
+import msvcrt
 
 class OpenIGTLinkHeader:
 
@@ -1373,4 +1375,751 @@ class OpenIGTLinkConnection:
             self.setState(previousState)
             return
 
+class OpenIGTLinkServer():
 
+    __state = "Disconnected"
+    __mutexState = threading.Semaphore()
+
+    __connections = list()
+    __connectionsAddress = list()
+    __connectionFlag = False
+    __mutexConnections = threading.Semaphore()
+
+    __messageLists = list()
+    __messageListsNames = list()
+    __mutexMessageLists = threading.Semaphore()
+
+    __mutexSending = threading.Semaphore()
+    __mutexInstruction = threading.Semaphore()
+    __instruction = ''
+    __stop_event = threading.Event()
+
+
+    def __init__(self, host = 'localhost', portnumber = 18944, maximumConnections = 50):
+
+        try:
+            print "Creating IGTLinkServer"
+            self.host = host
+            self.portnumber = portnumber
+            self.maximumConnections = maximumConnections
+        except Exception as inst:
+            print "[Error]"
+            print inst
+        finally:
+            print "Starting  OpenIGTLinkServer:"
+            print "    - Host:", self.host
+            print "    - Port Number:", self.portnumber
+            print "    - Max. Connections:", self.maximumConnections
+            return
+    
+    def getState(self):
+        self.__mutexState.acquire()
+        try:
+            state = self.__state
+        except Exception as inst:
+            print "[Error]"
+            print inst
+        finally:
+            self.__mutexState.release()
+        return state
+
+    def setState(self, newState):
+        self.__mutexState.acquire()
+        try:
+            self.__state = newState
+        except Exception as inst:
+            print "[Error]"
+            print inst
+        finally:
+            self.__mutexState.release()
+        return
+
+    def connect(self):
+
+        # Check if connected
+        if self.getState() == "Connected":
+            print "Server already Connected"
+            return
+
+        previousState = self.getState()
+
+        if previousState == "Disconnected":
+            self.setState("AttemptingToConnect")
+
+            print "Trying to create Socket..."
+
+            try:
+                #create an AF_INET, STREAM socket (TCP)
+                self.socketConnection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.remote_ip = socket.gethostbyname( self.host )
+                self.socketConnection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self.socketConnection.bind((self.remote_ip , self.portnumber))
+                self.socketConnection.listen(self.maximumConnections)
+
+            except socket.error, msg:
+                print 'Failed to create socket. Error code: ' + str(msg[0]) + ' , Error message : ' + msg[1]
+                self.socketConnection = None
+                self.setState(previousState)
+                return
+
+            except socket.gaierror:
+                print 'Hostname could not be resolved. Exiting'
+                self.setState(previousState)
+
+            except Exception as inst:
+                print "[Error]"
+                print inst
+                self.socketConnection = None
+                self.remote_ip = None
+                self.setState(previousState)
+                return
+
+            print "Socket Created"
+            print 'Ip address of ' + self.host + ' is ' + self.remote_ip
+
+            print "Trying to launch server for listening..."
+            self.__mutexConnections.acquire()
+
+            self.__connectionFlag = True
+            self.__connections = list()
+            self.__connectionsAddress = list()
+
+            self.__mutexConnections.release()
+
+            self.setState('Connected')
+
+            # Lauch thread for listen new clients
+            self.listenNewConnectionThread = threading.Thread(target = self.startListenClients, args=())
+            self.listenNewConnectionThread.daemon = True
+            self.listenNewConnectionThread.start()
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Disconnected to perform connection"
+
+    def disconnect(self):
+
+        # Check if connected
+        if self.getState() == "Disconnected":
+            print "Server already disconnected"
+            return
+
+        previousState = self.getState()
+
+        if previousState == "Connected":
+            self.setState("AttemptingToDisconnect")
+            self.__connectionFlag = False
+            self.setState('Disconnected')
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Connected to perform disconnection"
+
+    def startListenClients(self):
+        print "Waiting for clients..."
+
+        while (self.getState() == 'Connected') or (self.getState() == 'Sending')  and self.__connectionFlag:
+
+            try:
+                self.__mutexConnections.acquire()
+                socketobject, addr = self.socketConnection.accept()
+                self.__connections.append(socketobject)
+                self.__connectionsAddress.append(addr)
+                print "Adding new connection at", addr[1]
+                self.__mutexConnections.release()
+                time.sleep(1)
+            except Exception as inst:
+                print "[Error] Adding new connection"
+                print inst
+                self.__mutexConnections.release()
+                return
+                
+
+        print "Stop Listen new connections to server"
+        self.__connections = list()
+        self.__connectionsAddress = list()
+        self.socketConnection = None
+        self.remote_ip = None
+
+    def stopListenClients(self):
+        self.__mutexConnections.acquire()
+        self.__connectionFlag = False
+        self.__mutexConnections.release()
+
+    def addMessageFile(self, filepath, name):
+
+        previousState = self.getState()
+
+        if previousState == "Disconnected":
+            self.setState("AttemptingToReadNewFile")
+
+            print "Trying to read Message file..."
+            print "    - File: ", filepath
+            print "    - Name: ", name
+
+            try:
+                # Read file CSV
+                df = pandas.read_csv(filepath)
+                # Create messageList
+                messageList = list()
+
+                for i in range(len(df.index)):
+                    message = df.loc[i]
+                    
+                    m = None
+                    if message['TYPE'] == 'TRANSFORM':
+                        
+                        npTransform = numpy.eye(4)
+                        for ii in range(3):
+                            for jj in range(4):
+                                npTransform[ii,jj] = float(message['T' + str(ii) + str(jj)])
+                        
+                        
+                        t = OpenIGTLinkTransform()
+                        m = t.setOpenIGTLinkTransform(  npTransform = npTransform,\
+                                                        floatTimeStamp = float(message['TIME_STAMP']),\
+                                                        transformName = message['DEVICE_NAME'])
+                        messageList.append(m)
+                    
+                    elif message['TYPE'] == 'STATUS':
+                        s = OpenIGTLinkStatus()
+                        m = s.setOpenIGTLinkStatus(statusCode = int(message['CODE']),\
+                                                         statusSubCode = int(message['SUBCODE']),\
+                                                         errorName = message['ERROR_NAME'],\
+                                                         statusMessage = message['STATUS_MESSAGE'],\
+                                                         deviceName = message['DEVICE_NAME'],\
+                                                         floatTimeStamp = float(message['TIME_STAMP']))
+                        messageList.append(m)
+                    else:
+                        print "Problem readind row: ", i
+
+                # Add new message list to general list
+                self.__mutexMessageLists.acquire()
+
+                self.__messageLists.append(messageList)
+                self.__messageListsNames.append(name)
+                time.sleep(2)
+                print "Added new file!"
+                print "Number of messages: ", len(self.__messageListsNames)
+
+                self.__mutexMessageLists.release()
+
+                self.setState('Disconnected')
+            except Exception as inst:
+                print "[Error]"
+                print inst
+                self.setState(previousState)
+                return
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Disconnected to read new messages"
+
+    def removeAllMessages(self):
+
+        previousState = self.getState()
+
+        if previousState == "Disconnected":
+            self.setState("AttemptingToRemoveFiles")
+
+            print "Trying to Remove All Messages..."
+
+            try:
+                self.__mutexMessageLists.acquire()
+                self.__messageLists = list()
+                self.__messageListsNames = list()
+
+                print "Removed !"
+                print "Number of messages: ", len(self.__messageListsNames)
+                self.__mutexMessageLists.release()
+
+                self.setState(previousState)
+
+            except Exception as inst:
+                print "[Error]"
+                print inst
+                self.setState(previousState)
+                return
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Disconnected to perform removal of messages"
+
+    def sendData(self, rate = 0.2):
+
+        previousState = self.getState()
+
+        if previousState == "Connected":
+            self.setState("Sending")
+
+            print "Start Data Sending:"
+
+            #self.__mutexConnections.acquire()
+            print "    - Number of clients: ", len(self.__connections)
+            for i in range(len(self.__connections)):
+                print "        - [" + str(i) + "]:", self.__connectionsAddress[i]
+            #self.__mutexConnections.release()
+
+
+            self.__mutexMessageLists.acquire()
+            print "    - Number of files to send", len(self.__messageListsNames)
+            for i in range(len(self.__messageListsNames)):
+                print "        - [" + str(i) + "]:", self.__messageListsNames[i]
+            self.__mutexMessageLists.release()
+
+            if len(self.__messageListsNames) == 0:
+                print "No messages to send..."
+                print "Returning..."
+                self.setState(previousState)
+                return
+
+            print "..."
+
+            #Launch thread for sending
+            self.__mutexSending.acquire()
+            self.__flagSending = True
+            self.__instruction = 'Continue'
+            self.__mutexSending.release()
+            self.rate = rate
+            self.SendingThread = threading.Thread(target = self.startSendingData, args=())
+            self.SendingThread.daemon = True
+            self.SendingThread.start()
+
+            while self.__instruction != 'x':
+
+                try:
+
+                    while self.SendingThread.is_alive():
+                        pass
+                except (KeyboardInterrupt, SystemExit):
+                    self.__mutexSending.acquire()
+                    self.__stop_event.set()
+                    print "Sending -  waiting for new instruction"
+                    print "Press [c] for continue"
+                    print "Press [r] for restarting"
+                    print "Press [n] for jump to next message"
+                    print "Press [x] for exit"
+                    # Wait for some order
+                    self.__instruction = msvcrt.getch()
+                    self.__mutexSending.release()
+
+            print "Sending Finished\n"
+            self.setState(previousState)
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Connected to send data"
+
+    def startSendingData(self):
+        print "Starting Sending Thread"
+        event_is_set = False
+
+        self.current_socket_i = 0
+        self.current_messagefile_i = 0
+        self.current_message_i = 0
+        
+        while not event_is_set:
+         
+            # Check if message exists in list
+            if self.current_message_i < len(self.__messageLists[self.current_messagefile_i]):
+
+                # Send message to all connections
+                if len(self.__connections) > 0:
+                    for s in self.__connections:
+
+                        try:
+                            print "Socket - ", self.current_socket_i, 'Message - ', self.__messageListsNames[self.current_messagefile_i], ' Message - ', self.current_message_i
+
+                            s.send( self.__messageLists[self.current_messagefile_i][self.current_message_i] )
+
+                        except:
+
+                            s.close()
+                            self.__connections.remove(s)
+                            self.__connectionsAddress.remove(self.__connectionsAddress[self.current_socket_i])
+                            print '* One link removed'
+
+                        finally:
+
+                            self.current_socket_i = self.current_socket_i + 1
+
+                self.current_message_i = self.current_message_i + 1
+                self.current_socket_i = 0
+                    
+            else:
+                self.current_message_i = 0
+
+
+            event_is_set = self.__stop_event.wait(self.rate)
+
+            if event_is_set:
+
+                print "New order. Waiting..."
+                self.__mutexSending.acquire()
+
+                if self.__instruction == 'c':
+                    print "Continue"
+                    event_is_set = False
+                    self.__stop_event.clear()
+
+                elif self.__instruction == 'r':
+                    print "Restarting"
+                    self.current_message_i = 0
+                    event_is_set = False
+                    self.__stop_event.clear()
+
+                elif self.__instruction == 'n':
+                    print "Next Message"
+
+                    self.current_messagefile_i = self.current_messagefile_i + 1
+
+                    if not( self.current_messagefile_i < len(self.__messageLists) ):
+                        print "There is no more messages. Restarting message list"
+                        self.current_messagefile_i = 0
+
+                    print "Sending ", self.__messageListsNames[self.current_messagefile_i]
+                    self.current_message_i = 0
+                    event_is_set = False
+                    self.__stop_event.clear()
+
+                elif self.__instruction == 'x':
+                    self.__stop_event.clear()
+                    print "Finishing Thread"
+
+                else:
+                    print "Option is not recognised"
+                    print "Continue..."
+                    event_is_set = False
+                    self.__stop_event.clear()
+
+                self.__mutexSending.release()
+
+    def stopSendingData(self):
+        self.__mutexSending.acquire()
+        self.__stop_event.set()
+        self.__instruction = 'x'
+        self.__mutexSending.release()
+
+class OpenIGTLinkClient():
+
+    __state = "Disconnected"
+    __mutexState = threading.Semaphore()
+
+    __connectionFlag = False
+    __mutexConnection = threading.Semaphore()
+
+    __mutexListening = threading.Semaphore()
+    __stop_event = threading.Event()
+    __flagListening = False
+    __instruction = ''
+    __messageListDf = list()
+
+    def __init__(self, host = 'localhost', portnumber = 18944):
+
+        try:
+            print "Creating IGTLinkClient"
+            self.host = host
+            self.portnumber = portnumber
+        except Exception as inst:
+            print "[Error]"
+            print inst
+        finally:
+            print "Starting  OpenIGTLinkServer:"
+            print "    - Host:", self.host
+            print "    - Port Number:", self.portnumber
+            return
+
+    def getState(self):
+        self.__mutexState.acquire()
+        try:
+            state = self.__state
+        except Exception as inst:
+            print "[Error]"
+            print inst
+        finally:
+            self.__mutexState.release()
+        return state
+
+    def setState(self, newState):
+        self.__mutexState.acquire()
+        try:
+            self.__state = newState
+        except Exception as inst:
+            print "[Error]"
+            print inst
+        finally:
+            self.__mutexState.release()
+        return
+
+    def connect(self):
+        # Check if connected
+        if self.getState() == "Connected":
+            print "Client already Connected"
+            return
+
+        previousState = self.getState()
+
+        if previousState == "Disconnected":
+            self.setState("AttemptingToConnect")
+
+            print "Trying to create Socket..."
+            try:
+                self.socketConnection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.remote_ip = socket.gethostbyname( self.host )
+
+            except socket.gaierror:
+                print 'Hostname could not be resolved. Exiting'
+                self.setState(previousState)
+
+            except Exception as inst:
+                print "[Error]"
+                print inst
+                self.socketConnection = None
+                self.remote_ip = None
+                self.setState(previousState)
+                return
+
+            print "Socket Created"
+            print 'Ip address of ' + self.host + ' is ' + self.remote_ip
+
+            print "Trying to connect..."
+
+            self.__mutexConnection.acquire()
+            self.__connectionFlag = True
+            self.__mutexConnection.release()
+
+            self.setState('TryingToConnectToServer')
+
+            # Lauch thread for listen new clients
+            self.listenNewConnectionThread = threading.Thread(target = self.startConnectingToServer, args=())
+            self.listenNewConnectionThread.daemon = True
+            self.listenNewConnectionThread.start()
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Client in state: ", self.getState()
+            print "It must be Disconnected to perform connection"
+
+    def startConnectingToServer(self):
+        print "Waiting for servers..."
+
+        while (self.getState() == 'TryingToConnectToServer') and self.__connectionFlag:
+
+            try:
+                self.__mutexConnection.acquire()
+
+                self.socketConnection.settimeout(60)    
+                self.socketConnection.connect((self.remote_ip , self.portnumber))
+                time.sleep(1)
+
+                self.setState('Connected')
+
+                self.__mutexConnection.release()
+
+            except Exception as inst:
+
+                print "..."
+                self.setState('TryingToConnectToServer')
+                self.__mutexConnection.release()
+                
+        if self.getState() == 'Connected':
+
+            print "Client correctly connected and ready for listening"
+
+        else:
+
+            print "Stop trying new server"
+            self.socketConnection = None
+            self.remote_ip = None
+
+    def stopConnectingToServer(self):
+
+        previousState = self.getState()
+
+        if previousState == "TryingToConnectToServer":
+
+            self.__mutexConnection.acquire()
+            self.__connectionFlag = False
+            self.__mutexConnection.release()
+
+            self.setState('Disconnected')
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be TryingToConnectToServer to perform stopConnectingToServer"
+
+    def disconnect(self):
+
+        # Check if connected
+        if self.getState() == "Disconnected":
+            print "Client already disconnected"
+            return
+
+        previousState = self.getState()
+
+        if previousState == "Connected":
+            self.setState("AttemptingToDisconnect")
+            self.__connectionFlag = False
+            self.setState('Disconnected')
+
+            self.socketConnection = None
+            self.remote_ip = None
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Connected to perform disconnection"
+
+    def listenData(self):
+        previousState = self.getState()
+
+        if previousState == "Connected":
+            self.setState("Listening")
+
+            print "Start Data Listening:"
+
+            #Launch thread for sending
+            self.__mutexListening.acquire()
+            self.__flagListening = True
+            self.__instruction = 'Continue'
+            self.__messageListDf = list()
+            self.__mutexListening.release()
+
+
+            self.ListeningThread = threading.Thread(target = self.startListeningData, args=())
+            self.ListeningThread.daemon = True
+            self.ListeningThread.start()
+
+            while self.__instruction != 'x':
+
+                try:
+
+                    while self.ListeningThread.is_alive():
+                        pass
+                except (KeyboardInterrupt, SystemExit):
+                    self.__mutexListening.acquire()
+                    self.__stop_event.set()
+                    print "Sending -  waiting for new instruction"
+                    print "Press [c] for continue"
+                    print "Press [x] for exit"
+                    # Wait for some order
+                    self.__instruction = msvcrt.getch()
+                    self.__mutexListening.release()
+
+            print "Listening Finished"
+            print "Call WriteFile to save recorded data"
+            self.setState(previousState)
+
+        else:
+            print "---- Never reach this point ----"
+            self.setState(previousState)
+            print "Server in state: ", self.getState()
+            print "It must be Connected to send data"
+
+    def startListeningData(self):
+
+        print "Starting Listening Thread"
+        event_is_set = False
+
+        while not event_is_set:
+
+            try:
+                self.readMessage()
+            except:
+                pass
+
+            event_is_set = self.__stop_event.wait(0.1)
+
+            if event_is_set:
+
+                print "New order. Waiting..."
+                self.__mutexListening.acquire()
+
+                if self.__instruction == 'c':
+                    print "Continue"
+                    event_is_set = False
+                    self.__stop_event.clear()
+
+                elif self.__instruction == 'x':
+                    self.__stop_event.clear()
+                    print "Finishing Thread"
+
+                else:
+                    print "Option is not recognised"
+                    print "Continue..."
+                    event_is_set = False
+                    self.__stop_event.clear()
+
+                self.__mutexListening.release()
+
+    def readMessage(self):
+
+        try:
+            # Create header
+            header = OpenIGTLinkHeader()
+
+            # Receive data from socket
+            socketHeader = self.socketConnection.recv(header.IGTLinkHeaderSize)
+
+            # Unpack header
+            header.unpack(socketHeader)
+
+            # Read Body Size
+            bodySize = header.getBODY_SIZE()
+            socketBody = self.socketConnection.recv(bodySize)
+
+
+
+            # Check Type of message
+            if header.getTYPE() == 'STATUS':
+                status = OpenIGTLinkStatus()
+                status.header.unpack(socketHeader)
+                status.unpackStatus(socketBody)
+                self.__messageListDf.append(status.getDictRepresentation())
+                #print "[Status]"
+            elif header.getTYPE() == 'TRANSFORM':
+                transform = OpenIGTLinkTransform()
+                transform.header.unpack(socketHeader)
+                transform.unpackTransform(socketBody)
+                self.__messageListDf.append(transform.getDictRepresentation())
+                #print "[Transform]"
+
+
+            else:
+                print "Message Type is not recognised: " + header.getTYPE()
+
+        except:
+            print "Connection could be lost?..."
+            raise
+
+    def writeFile(self, filepath):
+
+    
+        print "Trying to Write Message File"
+
+        try:
+            if self.__messageListDf:
+                df = pandas.DataFrame(self.__messageListDf)
+                df.to_csv(filepath, index = False, na_rep = 'NaN')
+            else:
+                "No data to save"
+
+        except Exception as inst:
+            print "[Error]: Cannot Write File"
+            print inst
+
+        print "File Written. Number of messages:", len(self.__messageListDf)
